@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub const TEMPLATE_TABLE_ROW: &str = "TEMPLATE_TABLE_ROW";
 pub const UNSUPPORTED_STR: &str = "???";
@@ -179,6 +180,8 @@ impl DirectoryBuffer {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum InternalMsg {
+    Exploring(String),
+    Listening,
     AddDirectory(String, DirectoryBuffer),
     HandleKey(Key),
 }
@@ -737,6 +740,12 @@ impl History {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum State {
+    Listening,
+    Exploring(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct App {
     version: String,
@@ -753,6 +762,7 @@ pub struct App {
     explorer_config: ExplorerConfig,
     logs: Vec<Log>,
     history: History,
+    state: State,
 }
 
 impl App {
@@ -811,13 +821,15 @@ impl App {
             ));
         }
 
+        let pwd_str = pwd.to_string_lossy().to_string();
+
         let mut history = History::default();
-        history = history.push(pwd.to_string_lossy().to_string());
+        history = history.push(pwd_str.clone());
 
         let mut app = Self {
             version: Config::default().version,
             config: config.clone(),
-            pwd: pwd.to_string_lossy().to_string(),
+            pwd: pwd_str.clone(),
             directory_buffers: Default::default(),
             selection: Default::default(),
             msg_out: Default::default(),
@@ -829,6 +841,7 @@ impl App {
             explorer_config,
             logs: Default::default(),
             history,
+            state: State::Exploring(pwd_str.clone()),
         };
 
         if let Some(notif) = config.upgrade_notification()? {
@@ -871,6 +884,8 @@ impl App {
         match msg {
             InternalMsg::AddDirectory(parent, dir) => self.add_directory(parent, dir),
             InternalMsg::HandleKey(key) => self.handle_key(key),
+            InternalMsg::Exploring(dir) => self.exploring(&dir),
+            InternalMsg::Listening => self.listening(),
         }
     }
 
@@ -964,6 +979,16 @@ impl App {
         Ok(self)
     }
 
+    fn exploring(mut self, path: &String) -> Result<Self> {
+        self.state = State::Exploring(path.clone());
+        Ok(self)
+    }
+
+    fn listening(mut self) -> Result<Self> {
+        self.state = State::Listening;
+        Ok(self)
+    }
+
     fn explore(mut self) -> Result<Self> {
         self.msg_out.push_back(MsgOut::Explore);
         Ok(self)
@@ -988,6 +1013,7 @@ impl App {
     }
 
     fn focus_last(mut self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = dir.total.max(1) - 1;
             self.msg_out.push_back(MsgOut::Refresh);
@@ -996,6 +1022,7 @@ impl App {
     }
 
     fn focus_previous(mut self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = dir.focus.max(1) - 1;
             self.msg_out.push_back(MsgOut::Refresh);
@@ -1004,6 +1031,7 @@ impl App {
     }
 
     fn focus_previous_by_relative_index(mut self, index: usize) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = dir.focus.max(index) - index;
             self.msg_out.push_back(MsgOut::Refresh);
@@ -1012,6 +1040,7 @@ impl App {
     }
 
     fn focus_previous_by_relative_index_from_input(self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(index) = self.input_buffer().and_then(|i| i.parse::<usize>().ok()) {
             self.focus_previous_by_relative_index(index)
         } else {
@@ -1020,6 +1049,7 @@ impl App {
     }
 
     fn focus_next(mut self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = (dir.focus + 1).min(dir.total.max(1) - 1);
             self.msg_out.push_back(MsgOut::Refresh);
@@ -1028,6 +1058,7 @@ impl App {
     }
 
     fn focus_next_by_relative_index(mut self, index: usize) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = (dir.focus + index).min(dir.total.max(1) - 1);
             self.msg_out.push_back(MsgOut::Refresh);
@@ -1119,6 +1150,7 @@ impl App {
     }
 
     fn focus_by_index(mut self, index: usize) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir) = self.directory_buffer_mut() {
             dir.focus = index.min(dir.total.max(1) - 1);
             self.msg_out.push_back(MsgOut::Refresh);
@@ -1127,6 +1159,7 @@ impl App {
     }
 
     fn focus_by_index_from_input(self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(index) = self.input_buffer().and_then(|i| i.parse::<usize>().ok()) {
             self.focus_by_index(index)
         } else {
@@ -1135,6 +1168,7 @@ impl App {
     }
 
     fn focus_by_file_name(mut self, name: &str) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(dir_buf) = self.directory_buffer_mut() {
             if let Some(focus) = dir_buf
                 .clone()
@@ -1152,6 +1186,7 @@ impl App {
     }
 
     fn focus_path(self, path: &str) -> Result<Self> {
+        self.wait_for_pwd();
         let pathbuf = PathBuf::from(path);
         if let Some(parent) = pathbuf.parent() {
             if let Some(filename) = pathbuf.file_name() {
@@ -1166,6 +1201,7 @@ impl App {
     }
 
     fn focus_path_from_input(self) -> Result<Self> {
+        self.wait_for_pwd();
         if let Some(p) = self.input_buffer() {
             self.focus_path(&p)
         } else {
@@ -1521,5 +1557,11 @@ impl App {
     /// Get a reference to the app's version.
     pub fn version(&self) -> &String {
         &self.version
+    }
+
+    pub fn wait_for_pwd(&self) {
+        while self.state == State::Exploring(self.pwd.clone()) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 }

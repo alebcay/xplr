@@ -240,6 +240,7 @@ modes:
                   PTH="${XPLR_INPUT_BUFFER:?}"
                   if touch "${PTH:?}"; then
                     echo Explore >> "${XPLR_PIPE_MSG_IN:?}"
+                    echo "FocusPath: $PTH" >> "${XPLR_PIPE_MSG_IN:?}"
                     echo "LogSuccess: $PTH created" >> "${XPLR_PIPE_MSG_IN:?}"
                     echo "FocusPath: $PTH" >> "${XPLR_PIPE_MSG_IN:?}"
                   else
@@ -617,7 +618,6 @@ modes:
                       echo "LogError: Failed to delete $line" >> "${XPLR_PIPE_MSG_IN:?}"
                     fi
                   done < "${XPLR_PIPE_RESULT_OUT:?}")
-                  echo Explore >> "${XPLR_PIPE_MSG_IN:?}"
                   read -p "[enter to continue]"
               - SwitchMode: default
               - Explore

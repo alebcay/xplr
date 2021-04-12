@@ -15,6 +15,12 @@ pub fn explore(
     let tx_cloned = tx.clone();
     let config_cloned = config.clone();
 
+    tx.send(Task::new(
+        MsgIn::Internal(InternalMsg::Exploring(path.to_string_lossy().to_string())),
+        None,
+    ))
+    .unwrap();
+
     thread::spawn(move || {
         fs::read_dir(&path)
             .map(|dirs| {
@@ -56,7 +62,10 @@ pub fn explore(
                     None,
                 ))
                 .unwrap();
-            })
+            });
+
+        tx.send(Task::new(MsgIn::Internal(InternalMsg::Listening), None))
+            .unwrap();
     });
 
     if let Some(grand_parent) = path_cloned.parent() {
